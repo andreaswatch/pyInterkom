@@ -1,8 +1,8 @@
 var pc = null;
 
 function negotiate() {
-    pc.addTransceiver('video', {direction: 'recvonly'});
-    pc.addTransceiver('audio', {direction: 'recvonly'});
+    pc.addTransceiver('video', {direction: 'recvonly'}); //what about sendrecv?
+    pc.addTransceiver('audio', {direction: 'sendrecv'}); //what about sendrecv?
     return pc.createOffer().then(function(offer) {
         return pc.setLocalDescription(offer);
     }).then(function() {
@@ -40,7 +40,6 @@ function negotiate() {
         alert(e);
     });
 }
-
 function start() {
     var config = {
         sdpSemantics: 'unified-plan'
@@ -62,12 +61,23 @@ function start() {
     });
 
     document.getElementById('start').style.display = 'none';
-    negotiate();
+
+    // get access to the microphone and start negotiation
+    navigator.mediaDevices.getUserMedia({audio: true}).then(function(stream) {
+        stream.getTracks().forEach(function(track) {
+            pc.addTrack(track, stream);
+        });
+        negotiate();
+    });
+
     document.getElementById('stop').style.display = 'inline-block';
 }
 
+
 function stop() {
     document.getElementById('stop').style.display = 'none';
+    document.getElementById('start').style.display = 'initial';
+
 
     // close peer connection
     setTimeout(function() {
