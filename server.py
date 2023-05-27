@@ -17,6 +17,8 @@ from aiortc import RTCPeerConnection, RTCSessionDescription
 from aiortc.contrib.media import MediaPlayer, MediaRecorder, MediaBlackhole, MediaRelay 
 from aiortc.rtcrtpsender import RTCRtpSender
 from aiortc.mediastreams import MediaStreamTrack, AudioStreamTrack
+from SystemMicrophone import SystemMicrophone
+from SystemSpeaker import SystemSpeaker
 
 ROOT = os.path.dirname(__file__)
 def printAudioDevices():
@@ -33,127 +35,6 @@ def printAudioDevices():
         print(f"   maxOutputChannels:  {device_info['maxOutputChannels']}")
         print(f"   defaultSampleRate: {device_info['defaultSampleRate']}")
 printAudioDevices()
-
-class SystemMic(MediaStreamTrack):
-    kind = "audio"
-    
-    def __init__(self, audio):
-        super().__init__()
-        self.audio        = audio
-
-        self.INDEX        = 4
-        device_info       = self.audio.get_device_info_by_index(self.INDEX)
-        self.kind         = "audio"
-        self.RATE         = int(device_info['defaultSampleRate']) #44100
-        self.AUDIO_PTIME  = 0.020                                    # 20ms audio packetization
-        self.SAMPLES      = int(self.AUDIO_PTIME * self.RATE)
-        self.FORMAT       = pyaudio.paInt32
-        self.CHANNELS     = int(device_info['maxInputChannels']) #2
-        self.CHUNK        = int(self.RATE*self.AUDIO_PTIME)
-        self.FORMATAF     = 's16'   #'s32'                           # s32_le
-        self.LAYOUT       = 'stereo'
-        self.sampleCount  = 0
-
-        self.stream       = self.audio.open(format=self.FORMAT, 
-                                            channels=self.CHANNELS,
-                                            rate=self.RATE,
-                                            input=True, 
-                                            input_device_index=self.INDEX,
-                                            frames_per_buffer=self.CHUNK)
-        #thread
-        self.micData          = None
-        self.micDataLock      = Lock()
-        self.newMicDataEvent  = Event()
-        self.newMicDataEvent.clear()
-        self.exit_event = Event()
-        self.captureThread = Thread(target=self.capture)
-        self.captureThread.start()
-        
-
-    def capture(self):
-        while not self.exit_event.is_set():
-            data  = np.fromstring(self.stream.read(self.CHUNK),dtype=np.int32)
-            
-            with self.micDataLock:
-                self.micData = data
-                self.newMicDataEvent.set()
-    
-        
-    async def recv(self):
-        newMicData = None
-            
-        self.newMicDataEvent.wait()
-
-        with self.micDataLock:
-            data  = self.micData
-            data  = (data/2).astype('int32')
-            data  = np.array([(data>>16).astype('int16')])
-            self.newMicDataEvent.clear()
-        
-        frame   = av.AudioFrame.from_ndarray(data, self.FORMATAF, layout=self.LAYOUT)
-        frame.pts         = self.sampleCount
-        frame.rate        = self.RATE
-        self.sampleCount += frame.samples
-
-        return frame
-
-    def stop(self):
-        self.exit_event.set()
-        self.captureThread.join() #was:
-        #self.captureThread.kill()
-
-class AudioPlayerTrack():
-    kind = "audio"
-
-    def __init__(self, audio):
-        super().__init__()
-        self.track = None
-        self.audio = pyaudio.PyAudio()
-        self.INDEX        = 0
-        device_info       = self.audio.get_device_info_by_index(self.INDEX)
-        print(device_info['name'])
-        self.kind         = "audio"
-        self.RATE         = int(device_info['defaultSampleRate']) #44100
-        self.AUDIO_PTIME  = 0.020                                    # 20ms audio packetization
-        self.SAMPLES      = int(self.AUDIO_PTIME * self.RATE)
-        self.FORMAT       = pyaudio.paInt32
-        self.CHANNELS     = int(device_info['maxOutputChannels']) #2
-        self.CHUNK        = int(self.RATE*self.AUDIO_PTIME)
-        self.FORMATAF     = 's32_le'   #'s32'                           # s32_le
-        self.LAYOUT       = 'stereo'
-        self.sampleCount  = 0
-
-        self.stream       = self.audio.open(format=self.FORMAT, 
-                                            channels=self.CHANNELS,
-                                            rate=self.RATE,
-                                            output=True, 
-                                            input_device_index=self.INDEX,
-                                            frames_per_buffer=self.CHUNK)
-
-    async def play(self, track):
-        try:
-            while True:
-                frame = await track.recv()
-                if frame:
-                    data = frame.to_ndarray()
-                    data = data.astype('int32') << 16
-                    self.stream.write(data.tobytes())
-        except Exception as e:
-            print(f"Error while receiving frames: {e}")
-
-    def stop(self):
-        try:
-            self.stream.stop_stream()
-        except:
-            pass
-        try:
-            self.stream.close()
-        except:
-            pass
-        try:
-            self.audio.terminate()
-        except:
-            pass
 
 
 def force_codec(pc, sender, forced_codec):
@@ -208,17 +89,14 @@ async def offer(request):
 
     audio = pyaudio.PyAudio()
 
-    mic = SystemMic(audio)
+    mic = SystemMicrophone(audio)
     mic_sender = pc.addTrack(mic)
     if args.audio_codec:
         force_codec(pc, mic_sender, args.audio_codec)
     elif args.play_without_decoding:
         raise Exception("You must specify the audio codec using --audio-codec")    
 
-    #receiver = BrowserAudioReceiver(audio)
-    #pc.addTrack(receiver)
-
-    speaker = AudioPlayerTrack(audio)
+    speaker = SystemSpeaker(audio)
 
     @pc.on("track")
     async def on_track(track):
